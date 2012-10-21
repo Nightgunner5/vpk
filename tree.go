@@ -7,28 +7,30 @@ import (
 	"io"
 )
 
-func readString(reader bufio.Reader, buf *[]byte) (string, error) {
-	*buf = *buf[:0]
+func readString(reader *bufio.Reader, buf *[]byte) (string, error) {
+	*buf = (*buf)[:0]
 
 	for {
 		c, err := reader.ReadByte()
 		if err != nil {
-			return nil, err
+			return "", err
 		}
 
-		if c == '\0' {
+		if c == '\000' {
 			return string(*buf), nil
 		}
 
 		*buf = append(*buf, c)
 	}
+
+	panic("This line is unreachable unless the universe is imploding. The fact that you reached it leads me to believe the universe is actually imploding, which should be accompanied by activities other than reading Go source code.")
 }
 
 // Returns map[extension][path][filename]FileInfo
-func readTree(reader bufio.Reader) map[string]map[string]map[string]FileInfo {
+func readTree(reader *bufio.Reader) (map[string]map[string]map[string]*FileInfo, error) {
 	buf := make([]byte, 0, 64)
 
-	fileTree := make(map[string]map[string]map[string]FileInfo)
+	fileTree := make(map[string]map[string]map[string]*FileInfo)
 
 	var err error
 	var extension, path, filename string
@@ -56,14 +58,18 @@ func readTree(reader bufio.Reader) map[string]map[string]map[string]FileInfo {
 		}
 	}
 
-	return fileTree
+	if err != nil {
+		return nil, err
+	}
+
+	return fileTree, nil
 }
 
 type fileInfo struct {
 	CRC           uint32
 	PreloadLength uint16
 
-	ArchiveIndex int16 // If -1, the data is in this file with the offset starting from the end of the header.
+	ArchiveIndex uint16 // If -1, the data is in this file with the offset starting from the end of the header.
 
 	EntryOffset uint32
 
@@ -77,14 +83,14 @@ type FileInfo struct {
 
 	preload []byte
 
-	archiveIndex int16
+	archive uint16
 
 	offset, length uint32
 
 	extension, path, filename string
 }
 
-func readFileInfo(fileTree map[string]map[string]map[string]FileInfo, extension, path, filename string, reader io.Reader) error {
+func readFileInfo(fileTree map[string]map[string]map[string]*FileInfo, extension, path, filename string, reader io.Reader) error {
 	var info fileInfo
 	err := binary.Read(reader, binary.LittleEndian, &info)
 	if err != nil {
@@ -93,15 +99,15 @@ func readFileInfo(fileTree map[string]map[string]map[string]FileInfo, extension,
 
 	var ok bool
 
-	var extensionTree map[string]map[string]FileInfo
+	var extensionTree map[string]map[string]*FileInfo
 	if extensionTree, ok = fileTree[extension]; !ok {
-		extensionTree = make(map[string]map[string]FileInfo)
+		extensionTree = make(map[string]map[string]*FileInfo)
 		fileTree[extension] = extensionTree
 	}
 
-	var pathTree map[string]FileInfo
+	var pathTree map[string]*FileInfo
 	if pathTree, ok = extensionTree[path]; !ok {
-		pathTree = make(map[string]FileInfo)
+		pathTree = make(map[string]*FileInfo)
 		extensionTree[path] = pathTree
 	}
 
@@ -109,19 +115,19 @@ func readFileInfo(fileTree map[string]map[string]map[string]FileInfo, extension,
 		return fmt.Errorf("Duplicate file in same tree: %s/%s.%s", path, filename, extension)
 	}
 
-	pathTree[filename] = FileInfo{
-		crc:          info.CRC,
-		preload:      make([]byte, info.PreloadLength),
-		archiveIndex: info.ArchiveIndex,
-		offset:       info.EntryOffset,
-		length:       info.EntryLength,
-		extension:    extension,
-		path:         path,
-		filename:     filename,
+	pathTree[filename] = &FileInfo{
+		crc:       info.CRC,
+		preload:   make([]byte, info.PreloadLength),
+		archive:   info.ArchiveIndex,
+		offset:    info.EntryOffset,
+		length:    info.EntryLength,
+		extension: extension,
+		path:      path,
+		filename:  filename,
 	}
 
 	if info.PreloadLength != 0 {
-		_, err := io.ReadFull(reader, pathTree[filename].preload)
+		_, err := io.ReadFull(reader, (*pathTree[filename]).preload)
 		if err != nil {
 			return err
 		}
